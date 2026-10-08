@@ -30,6 +30,9 @@ dependencies {
 
     compileOnly 'org.jetbrains:annotations:26.0.2'
 
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.spigotmc:spigot-api:1.21.5-R0.1-SNAPSHOT'
+
     compileOnly fileTree(dir: 'libs', includes: ['*.jar'])
 }
 
