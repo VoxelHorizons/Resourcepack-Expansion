@@ -25,7 +25,7 @@ For example, with `assets/minecraft/lang/en_us.json` containing
 containing `{"menu.back":"Volver"}`, the **same** placeholder returns the
 appropriate translation for each player.
 
-Translations load asynchronously. The expansion checks for local pack updates every 30 seconds and refreshes remote packs at most once every five minutes. On the first request,
+Translations load asynchronously. Run `/papi reload` to immediately trigger a full translation rescan from the currently configured resource-pack ZIP or URL, bypassing the normal polling interval. Added keys and updated translations become available as soon as that asynchronous scan finishes; removed keys and locale files are discarded from the cache on a successful scan. If the pack is temporarily unreadable during a rebuild, the last known-good translations remain available. The expansion also checks for local pack updates every 30 seconds and refreshes remote packs at most once every five minutes. On the first request,
 or while a refresh runs, missing entries return their key unchanged.
 To use another plugin's generated pack, edit the auto-created
 `plugins/PlaceholderAPI/resourcepack-translations.yml`:

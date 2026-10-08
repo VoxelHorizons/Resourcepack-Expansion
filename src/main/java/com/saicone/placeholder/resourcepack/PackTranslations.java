@@ -75,15 +75,24 @@ final class PackTranslations {
         return map == null ? null : map.get(key);
     }
 
+    /** Rescan even when the pack URL, size and modification time have not changed. */
+    void reload() {
+        requestLoad(true);
+    }
+
     void ensureLoaded() {
+        requestLoad(false);
+    }
+
+    private void requestLoad(boolean forced) {
         long now = System.nanoTime();
-        if (now - nextRefresh < 0 || !running.compareAndSet(false, true)) return;
+        if ((!forced && now - nextRefresh < 0) || !running.compareAndSet(false, true)) return;
         nextRefresh = now + REFRESH_NANOS;
         // Read the server's URL on the calling thread, not from the async loader.
         String serverUrl = Bukkit.getResourcePack();
         loader.execute(() -> {
             try {
-                load(serverUrl);
+                load(serverUrl, forced);
             } catch (Exception e) {
                 Bukkit.getLogger().warning("[ResourcepackExpansion] Cannot read translations: " + e.getMessage());
             } finally {
@@ -92,7 +101,7 @@ final class PackTranslations {
         });
     }
 
-    private void load(String serverUrl) throws IOException {
+    private void load(String serverUrl, boolean forced) throws IOException {
         String configuredPath = configuredPackPath();
         Path local;
         if (!configuredPath.isEmpty()) {
@@ -117,13 +126,28 @@ final class PackTranslations {
         String fingerprint = local == null ? "" :
                 Files.getLastModifiedTime(local).to(TimeUnit.NANOSECONDS) + ":" + Files.size(local);
         long now = System.nanoTime();
-        if (source.equals(location)) {
+        if (!forced && source.equals(location)) {
             if (local != null && fingerprint.equals(localFingerprint)) return;
             if (local == null && now - lastRemoteLoad < REMOTE_REFRESH_NANOS) return;
         }
 
         try (InputStream stream = local != null ? Files.newInputStream(local) : remoteStream(location);
              ZipInputStream zip = new ZipInputStream(stream, StandardCharsets.UTF_8)) {
+            Map<String, Map<String, String>> found = readTranslations(zip);
+            // If a pack is being rebuilt or has no translations, preserve the
+            // previous known-good cache rather than replacing it with nothing.
+            if (found.isEmpty()) {
+                throw new IOException("No assets/minecraft/lang/*.json files found in " + location);
+            }
+            translations = Collections.unmodifiableMap(found);
+            source = location;
+            localFingerprint = fingerprint;
+            if (local == null) lastRemoteLoad = now;
+        }
+    }
+
+    /** Build a new complete snapshot: removed locales and keys must not remain in the old cache. */
+    static Map<String, Map<String, String>> readTranslations(ZipInputStream zip) throws IOException {
             Map<String, Map<String, String>> found = new HashMap<>();
             ZipEntry entry;
             int count = 0;
@@ -152,16 +176,7 @@ final class PackTranslations {
                 zip.closeEntry();
                 if (++count > 20000) throw new IOException("ZIP has too many entries");
             }
-            // If a pack is being rebuilt or has no translations, preserve the
-            // previous known-good cache rather than replacing it with nothing.
-            if (found.isEmpty()) {
-                throw new IOException("No assets/minecraft/lang/*.json files found in " + location);
-            }
-            translations = Collections.unmodifiableMap(found);
-            source = location;
-            localFingerprint = fingerprint;
-            if (local == null) lastRemoteLoad = now;
-        }
+        return found;
     }
 
     private static String configuredPackPath() throws IOException {

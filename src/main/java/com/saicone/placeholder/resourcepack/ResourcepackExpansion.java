@@ -42,6 +42,10 @@ public class ResourcepackExpansion extends PlaceholderExpansion implements Liste
         } catch (IOException e) {
             e.printStackTrace();
         }
+        // PlaceholderAPI creates a new expansion on /papi reload. Re-read the
+        // entire pack immediately, without waiting for a placeholder request
+        // or the usual local/remote polling interval.
+        translations.reload();
     }
 
     public void loadCache() throws IOException {
