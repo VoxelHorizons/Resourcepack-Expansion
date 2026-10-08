@@ -25,13 +25,24 @@ For example, with `assets/minecraft/lang/en_us.json` containing
 containing `{"menu.back":"Volver"}`, the **same** placeholder returns the
 appropriate translation for each player.
 
-Translations load in the background from the resource-pack URL configured on
-the server and refresh at most once every five minutes. On the first request,
+Translations load asynchronously. The expansion checks for local pack updates every 30 seconds and refreshes remote packs at most once every five minutes. On the first request,
 or while a refresh runs, missing entries return their key unchanged.
-For locally hosted or inaccessible pack URLs, place the **same actual pack ZIP**
-at `plugins/PlaceholderAPI/resourcepack-translations.zip` as a local override,
-rather than maintaining another set of language files. Restart the expansion
-after changing this file, or allow the regular five-minute refresh.
+To use another plugin's generated pack, edit the auto-created
+`plugins/PlaceholderAPI/resourcepack-translations.yml`:
+
+```yaml
+pack-path: 'plugins/VoxelCore/build/resource-packs/mc26.2.zip'
+```
+
+Relative paths are resolved from the Minecraft server's working directory;
+absolute paths also work. The expansion reads the ZIP directly and picks up
+rebuilds (based on its modification time and size) without restarting the server.
+The ZIP must contain `assets/minecraft/lang/<locale>.json`.
+
+If `pack-path` is empty, a ZIP at
+`plugins/PlaceholderAPI/resourcepack-translations.zip` takes precedence;
+otherwise the server's configured resource-pack URL is used. A configured path
+that does not exist logs a warning rather than silently switching to another pack.
 
 If a locale is missing a key, lookup falls back to its base language, then
 `en_us`, then the key itself. Resource packs typically only contain
