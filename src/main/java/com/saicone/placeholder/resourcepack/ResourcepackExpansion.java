@@ -26,6 +26,8 @@ import java.util.UUID;
 
 public class ResourcepackExpansion extends PlaceholderExpansion implements Listener, Cacheable, Cleanable {
 
+    private final PackTranslations translations = new PackTranslations();
+
     private static final String CACHE_FILE = "resourcepack-expansion-cache.csv.tmp";
 
     private final Map<UUID, PlayerResourcePackStatusEvent.Status> states = new HashMap<>();
@@ -94,6 +96,7 @@ public class ResourcepackExpansion extends PlaceholderExpansion implements Liste
             e.printStackTrace();
         }
         states.clear();
+        translations.close();
     }
 
     @Override
@@ -123,6 +126,14 @@ public class ResourcepackExpansion extends PlaceholderExpansion implements Liste
 
     @Override
     public @Nullable String onRequest(OfflinePlayer player, @NotNull String params) {
+        if (params.equalsIgnoreCase("locale")) {
+            return player instanceof Player ? ((Player) player).getLocale() : "en_us";
+        }
+        if (params.regionMatches(true, 0, "translate_", 0, 10)) {
+            if (!(player instanceof Player)) return params.substring(10);
+            String key = params.substring(10);
+            return key.isEmpty() ? "" : translations.translate((Player) player, key);
+        }
         switch (params.toLowerCase()) {
             case "loaded":
                 return String.valueOf(states.get(player.getUniqueId()) == PlayerResourcePackStatusEvent.Status.SUCCESSFULLY_LOADED);
