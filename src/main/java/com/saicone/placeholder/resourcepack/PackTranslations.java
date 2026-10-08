@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -21,6 +22,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,11 +34,14 @@ import java.util.zip.ZipInputStream;
  * Translation requests never perform file or network I/O on the server thread.
  */
 final class PackTranslations {
-    private static final long REFRESH_NANOS = 300_000_000_000L;
+    // Poll changes to config/local packs at most once every 30 seconds.
+    private static final long REFRESH_NANOS = 30_000_000_000L;
+    private static final long REMOTE_REFRESH_NANOS = 300_000_000_000L;
     private static final int MAX_ZIP_BYTES = 64 * 1024 * 1024;
     private static final int MAX_LANG_BYTES = 4 * 1024 * 1024;
     private static final String PREFIX = "assets/minecraft/lang/";
     private static final Path LOCAL_PACK = Paths.get("plugins", "PlaceholderAPI", "resourcepack-translations.zip");
+    private static final Path CONFIG_FILE = Paths.get("plugins", "PlaceholderAPI", "resourcepack-translations.yml");
 
     private final ExecutorService loader = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "Resourcepack-Translations");
@@ -47,6 +52,8 @@ final class PackTranslations {
     private volatile Map<String, Map<String, String>> translations = Collections.emptyMap();
     private volatile long nextRefresh = 0L;
     private volatile String source = "";
+    private volatile String localFingerprint = "";
+    private volatile long lastRemoteLoad = 0L;
 
     String translate(Player player, String key) {
         ensureLoaded();
@@ -72,9 +79,11 @@ final class PackTranslations {
         long now = System.nanoTime();
         if (now - nextRefresh < 0 || !running.compareAndSet(false, true)) return;
         nextRefresh = now + REFRESH_NANOS;
+        // Read the server's URL on the calling thread, not from the async loader.
+        String serverUrl = Bukkit.getResourcePack();
         loader.execute(() -> {
             try {
-                load();
+                load(serverUrl);
             } catch (Exception e) {
                 Bukkit.getLogger().warning("[ResourcepackExpansion] Cannot read translations: " + e.getMessage());
             } finally {
@@ -83,17 +92,37 @@ final class PackTranslations {
         });
     }
 
-    private void load() throws IOException {
-        String current = Bukkit.getResourcePack();
-        if (current == null) current = "";
-        String location = Files.isRegularFile(LOCAL_PACK) ? LOCAL_PACK.toAbsolutePath().toString() : current;
+    private void load(String serverUrl) throws IOException {
+        String configuredPath = configuredPackPath();
+        Path local;
+        if (!configuredPath.isEmpty()) {
+            local = Paths.get(configuredPath).toAbsolutePath().normalize();
+            if (!Files.isRegularFile(local)) {
+                throw new IOException("Configured resource pack not found: " + local);
+            }
+        } else {
+            local = Files.isRegularFile(LOCAL_PACK) ? LOCAL_PACK.toAbsolutePath().normalize() : null;
+        }
+
+        String location = local != null ? local.toString() : (serverUrl == null ? "" : serverUrl);
         if (location.isEmpty()) {
             translations = Collections.emptyMap();
             source = "";
+            localFingerprint = "";
             return;
         }
-        try (InputStream stream = Files.isRegularFile(LOCAL_PACK)
-                ? Files.newInputStream(LOCAL_PACK) : remoteStream(current);
+
+        // VoxelCore can replace its ZIP during publishing: notice an updated
+        // file without restarting the expansion or redownloading anything.
+        String fingerprint = local == null ? "" :
+                Files.getLastModifiedTime(local).to(TimeUnit.NANOSECONDS) + ":" + Files.size(local);
+        long now = System.nanoTime();
+        if (source.equals(location)) {
+            if (local != null && fingerprint.equals(localFingerprint)) return;
+            if (local == null && now - lastRemoteLoad < REMOTE_REFRESH_NANOS) return;
+        }
+
+        try (InputStream stream = local != null ? Files.newInputStream(local) : remoteStream(location);
              ZipInputStream zip = new ZipInputStream(stream, StandardCharsets.UTF_8)) {
             Map<String, Map<String, String>> found = new HashMap<>();
             ZipEntry entry;
@@ -123,9 +152,31 @@ final class PackTranslations {
                 zip.closeEntry();
                 if (++count > 20000) throw new IOException("ZIP has too many entries");
             }
+            // If a pack is being rebuilt or has no translations, preserve the
+            // previous known-good cache rather than replacing it with nothing.
+            if (found.isEmpty()) {
+                throw new IOException("No assets/minecraft/lang/*.json files found in " + location);
+            }
             translations = Collections.unmodifiableMap(found);
             source = location;
+            localFingerprint = fingerprint;
+            if (local == null) lastRemoteLoad = now;
         }
+    }
+
+    private static String configuredPackPath() throws IOException {
+        if (!Files.exists(CONFIG_FILE)) {
+            Files.createDirectories(CONFIG_FILE.getParent());
+            Files.write(CONFIG_FILE, (
+                    "# Resourcepack Expansion: local resource-pack ZIP path.\\n" +
+                    "# Relative paths start at the Minecraft server working directory.\\n" +
+                    "# Example: plugins/VoxelCore/build/resource-packs/mc26.2.zip\\n" +
+                    "# Leave blank to use resourcepack-translations.zip or the server pack URL.\\n" +
+                    "pack-path: ''\\n"
+            ).replace("\\n", "\n").getBytes(StandardCharsets.UTF_8));
+        }
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(CONFIG_FILE.toFile());
+        return yaml.getString("pack-path", "").trim();
     }
 
     private static InputStream remoteStream(String address) throws IOException {
